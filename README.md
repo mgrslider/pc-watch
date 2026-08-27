@@ -31,6 +31,9 @@ przy nazwie w sekcji „Dane".
 - wybór dnia i/lub warty → kto gdzie ma być
 - wpisanie imienia lub nazwiska → karta osoby z jej wszystkimi dyżurami
 - przyciski Wszystkie / Dzienne / Nocne zawężają rodzaj dyżuru
+- kliknięcie **nazwiska** otwiera kartę tej osoby ze wszystkimi jej dyżurami
+- kliknięcie **opisu warty** pokazuje, kto jeszcze jest na tej warcie i gdzie
+- przycisk „← Wróć" cofa do poprzedniego widoku
 
 ## Hosting i instalacja
 Netlify: projekt → zakładka Deploys → przeciągnij folder (drop tworzy NOWY projekt).
