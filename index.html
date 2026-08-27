@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Warty — dyżury</title>
+
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#111111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Warty">
+<link rel="apple-touch-icon" href="./icons/icon-180.png">
+
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;padding:16px;font-family:system-ui,sans-serif;background:#111;color:#eee}
+  h1{font-size:1.1rem;margin:0 0 12px}
+  input[type=search]{width:100%;padding:12px;font-size:1.1rem;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee}
+  select{width:100%;padding:10px;font-size:.95rem;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee}
+  .selects{display:flex;gap:8px;margin:10px 0;flex-wrap:wrap}
+  .selects > div{flex:1 1 140px;min-width:0}
+  .selects label{display:block;font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-bottom:4px}
+  .bar{display:flex;gap:8px;align-items:center;margin:12px 0;flex-wrap:wrap}
+  label.btn{padding:8px 12px;border-radius:8px;border:1px solid #444;background:#222;color:#eee;font-size:.9rem}
+  input[type=file]{display:none}
+  .muted{color:#888;font-size:.85rem}
+
+  .modes{display:flex;gap:6px;margin:10px 0;flex-wrap:wrap}
+  .mode{padding:7px 12px;border-radius:8px;border:1px solid #444;background:#222;color:#eee;font-size:.85rem;cursor:pointer}
+  .mode.active{background:#8ab4f8;color:#111;border-color:#8ab4f8}
+
+  .card{background:#1c1c1c;border:1px solid #333;border-radius:10px;padding:12px;margin:10px 0}
+  .card h2{font-size:1rem;margin:0 0 6px;color:#fff}
+  .day{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#8ab4f8;margin:18px 0 6px}
+  .day.n{color:#b3a1e8}
+  .warta{border-top:1px solid #262626;padding:8px 0 2px}
+  .warta h3{font-size:.85rem;margin:0 0 4px;color:#ddd;font-weight:600}
+  .warta .when{font-size:.75rem;color:#888;margin:0 0 6px}
+  .plist{margin:0 0 8px;padding-left:18px;font-size:.9rem;line-height:1.55}
+  .plist li span{color:#888;font-size:.78rem}
+  .row{display:flex;gap:8px;padding:4px 0;font-size:.9rem;border-top:1px solid #262626}
+  .k{color:#999;min-width:34%}
+  .v{flex:1;word-break:break-word}
+  .tag{display:inline-block;font-size:.65rem;text-transform:uppercase;letter-spacing:.05em;
+    color:#8ab4f8;border:1px solid #35507a;border-radius:10px;padding:1px 6px;margin-left:6px}
+  .tag.n{color:#b3a1e8;border-color:#4b3f75}
+
+  .del{color:#e57373;margin-left:6px;padding:0 4px;cursor:pointer;font-weight:bold}
+  details#datapanel{margin:14px 0;border-top:1px solid #262626;padding-top:8px}
+  details#datapanel summary{list-style:none;cursor:pointer;color:#777;font-size:.8rem;
+    display:flex;align-items:center;gap:6px;padding:2px 0}
+  details#datapanel summary::-webkit-details-marker{display:none}
+  details#datapanel summary::before{content:'▸';font-size:.75rem}
+  details#datapanel[open] summary::before{content:'▾'}
+  details#datapanel summary .muted{margin-left:auto}
+</style>
+</head>
+<body>
+
+<h1>Warty i dyżury</h1>
+<input type="search" id="q" placeholder="imię lub nazwisko…" autocomplete="off">
+
+<div class="modes">
+  <button class="mode active" data-mode="wszystkie">Wszystkie</button>
+  <button class="mode" data-mode="dzienne">Dzienne</button>
+  <button class="mode" data-mode="nocne">Nocne</button>
+</div>
+
+<div class="selects">
+  <div><label for="fday">Dzień</label><select id="fday"></select></div>
+  <div><label for="fwarta">Warta</label><select id="fwarta"></select></div>
+</div>
+
+<div id="out"></div>
+
+<details id="datapanel">
+  <summary>Dane (tylko na tym urządzeniu) <span class="muted" id="status"></span></summary>
+  <div class="bar">
+    <label class="btn">Dograj pliki (xlsx / csv)<input type="file" id="files" accept="*/*" multiple></label>
+  </div>
+  <div id="picker" class="bar"></div>
+</details>
+
+<script src="./vendor/xlsx.mini.min.js"></script>
+<script>
+let available = [];
+let selected = JSON.parse(localStorage.getItem('selected') || 'null');
+let currentMode = localStorage.getItem('mode') || 'wszystkie';
+let duties = [];            // {typ, dzien, imie, nazwisko, miejsce, warta, plec}
+
+/* ================= CSV ================= */
+
+function parseCSV(text){
+  text = text.replace(/^\uFEFF/,'').trim();
+  const first = text.split(/\r?\n/)[0] || '';
+  const sep = (first.split(';').length > first.split(',').length) ? ';' : ',';
+  const rows=[]; let row=[],cell='',inQ=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(inQ){
+      if(c==='"'&&text[i+1]==='"'){cell+='"';i++;}
+      else if(c==='"') inQ=false;
+      else cell+=c;
+    } else if(c==='"') inQ=true;
+    else if(c===sep){row.push(cell);cell='';}
+    else if(c==='\n'){row.push(cell);rows.push(row);row=[];cell='';}
+    else if(c!=='\r') cell+=c;
+  }
+  if(cell!==''||row.length){row.push(cell);rows.push(row);}
+  const clean=rows.filter(r=>r.some(v=>v.trim()!==''));
+  if(!clean.length) return {headers:[],rows:[]};
+  const headers=clean[0].map(h=>h.trim());
+  const data=clean.slice(1).map(r=>{
+    const o={}; headers.forEach((h,i)=>{ if(h) o[h]=(r[i]||'').trim(); }); return o;
+  });
+  return {headers:headers.filter(Boolean),rows:data};
+}
+
+const norm = s => (s||'').toString().toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+  .replace(/ł/g,'l').replace(/\s+/g,' ').trim();
+
+function col(headers, ...needles){
+  for(const n of needles){
+    const exact = headers.find(h => norm(h) === n);
+    if(exact) return exact;
+  }
+  for(const n of needles){
+    const part = headers.find(h => norm(h).includes(n));
+    if(part) return part;
+  }
+  return null;
+}
+
+/* ============ arkusze XLSX (układ nietabelaryczny) ============ */
+
+const JUNK = ['a','x','-','?','.'];
+
+function csvEscape(v){
+  v = (v == null ? '' : String(v));
+  return /[";\n]/.test(v) ? '"' + v.replace(/"/g,'""') + '"' : v;
+}
+
+function toCSV(cols, rows){
+  const head = cols.map(csvEscape).join(';');
+  const body = rows.map(r => cols.map(c => csvEscape(r[c])).join(';'));
+  return [head, ...body].join('\n');
+}
+
+/* arkusz "Dyżury dzienne/nocne": nagłówek dnia, wiersz opisów wart, potem miejsca */
+function flattenSheet(grid, sheetName){
+  const nocne = /noc/i.test(sheetName);
+  const wartaCol = nocne ? 'godzina' : 'pora';
+  const cols = ['dzień','imię','nazwisko','miejsce',wartaCol,'płeć'];
+  const out = [];
+
+  const maxc = grid.reduce((m,row)=> Math.max(m, row ? row.length : 0), 0);
+  const at = (r,c) => {
+    const row = grid[r];
+    const v = row && row[c] != null ? String(row[c]) : '';
+    return v.replace(/\s+/g,' ').trim();
+  };
+  const restOf = r => { const a=[]; for(let c=2;c<maxc;c++) a.push(at(r,c)); return a; };
+
+  let day = '', r = 0;
+  while(r < grid.length){
+    const a = at(r,0), b = at(r,1), rest = restOf(r);
+
+    if(a && !b && !rest.some(Boolean)){ day = a; r++; continue; }
+
+    if(norm(a) === 'miejsce dyzuru'){
+      r++;
+      const slots = {};
+      while(r < grid.length){                       // wiersze z opisami wart
+        const a2 = at(r,0), b2 = at(r,1), vals = restOf(r);
+        if(a2 || b2 || !vals.some(Boolean)) break;
+        vals.forEach((v,i)=>{ if(v) slots[i] = slots[i] ? slots[i] + ' — ' + v : v; });
+        r++;
+      }
+      while(r < grid.length){                       // wiersze z miejscami i osobami
+        const a3 = at(r,0), b3 = at(r,1), vals = restOf(r);
+        const anyV = vals.some(Boolean);
+        if(norm(a3) === 'miejsce dyzuru' || (a3 && !b3 && !anyV)) break;
+        if(!a3 && !b3 && !anyV){ r++; continue; }
+        vals.forEach((v,i)=>{
+          if(!v || v.length < 2 || JUNK.includes(norm(v))) return;
+          const parts = v.split(' ').filter(Boolean);
+          const nazwisko = parts.length > 1 ? parts[parts.length-1] : '';
+          const imie = parts.length > 1 ? parts.slice(0,-1).join(' ') : v;
+          const rec = {'dzień': day, 'imię': imie, nazwisko, miejsce: a3, 'płeć': b3};
+          rec[wartaCol] = slots[i] || '';
+          out.push(rec);
+        });
+        r++;
+      }
+      continue;
+    }
+    r++;
+  }
+
+  if(out.length) return toCSV(cols, out);
+
+  // zapas: zwykła tabelka z nagłówkiem w pierwszym wierszu
+  const head = (grid[0]||[]).map(h => String(h||'').trim());
+  if(!head.some(h => norm(h).includes('imie')) || !head.some(h => norm(h).includes('nazwisko'))) return null;
+  const flat = grid.slice(1)
+    .filter(row => row && row.some(v => String(v||'').trim()))
+    .map(row => { const o={}; head.forEach((h,i)=>{ if(h) o[h] = String(row[i]||'').trim(); }); return o; });
+  return flat.length ? toCSV(head.filter(Boolean), flat) : null;
+}
+
+/* plik xlsx -> [{name, csv}] (jeden wpis na arkusz) */
+function xlsxToCsvs(buffer, baseName){
+  if(typeof XLSX === 'undefined') throw new Error('Brak biblioteki XLSX');
+  const wb = XLSX.read(buffer, {type:'array'});
+  const res = [];
+  for(const sn of wb.SheetNames){
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, raw:false, defval:''});
+    const csv = flattenSheet(grid, sn);
+    if(csv) res.push({name: `${baseName} — ${sn}`, csv});
+  }
+  return res;
+}
+
+const isXlsx = n => /\.(xlsx|xlsm|xls)$/i.test(n);
+
+/* ================= model ================= */
+
+function buildDuties(tables){
+  duties = [];
+  for(const t of tables){
+    const H = t.headers;
+    const cImie  = col(H,'imie','imie (imiona)');
+    const cNazw  = col(H,'nazwisko');
+    const cDzien = col(H,'dzien','data');
+    const cMiej  = col(H,'miejsce');
+    const cGodz  = col(H,'godzina');
+    const cPora  = col(H,'pora');
+    const cPlec  = col(H,'plec');
+    if(!cImie || !cNazw) continue;
+
+    const nocne = !!cGodz || /noc/i.test(t.name);
+    const cWarta = cGodz || cPora;
+
+    for(const r of t.rows){
+      if(!r[cImie] && !r[cNazw]) continue;
+      duties.push({
+        typ: nocne ? 'nocne' : 'dzienne',
+        dzien: cDzien ? r[cDzien] : '',
+        imie: r[cImie] || '',
+        nazwisko: r[cNazw] || '',
+        miejsce: cMiej ? r[cMiej] : '',
+        warta: cWarta ? r[cWarta] : '',
+        plec: cPlec ? r[cPlec] : ''
+      });
+    }
+  }
+}
+
+/* dni w kolejności występowania w plikach */
+function daysList(list){
+  const seen = [];
+  for(const d of list) if(d.dzien && !seen.includes(d.dzien)) seen.push(d.dzien);
+  return seen;
+}
+
+function wartaList(list){
+  const seen = [];
+  for(const d of list) if(d.warta && !seen.includes(d.warta)) seen.push(d.warta);
+  return seen;
+}
+
+/* ================= źródła danych ================= */
+
+function localStore(){ return JSON.parse(localStorage.getItem('csvStore') || '{}'); }
+
+function status(){
+  const os = new Set(duties.map(d => norm(d.imie + '|' + d.nazwisko))).size;
+  document.getElementById('status').textContent =
+    duties.length ? `${duties.length} wpisów, ${os} osób` : 'brak danych';
+}
+
+async function discover(){
+  // dane pochodzą wyłącznie z plików wskazanych przez użytkownika (pamięć urządzenia)
+  available = Object.keys(localStore()).map(n => ({name:n, source:'local'}));
+  if(!selected) selected = available.map(a=>a.name);
+  selected = selected.filter(n => available.some(a => a.name === n));
+  renderPicker();
+  await loadSelected();
+}
+
+function renderPicker(){
+  const box = document.getElementById('picker');
+  box.innerHTML = available.map(a=>`
+    <label class="btn"><input type="checkbox" data-n="${a.name}"
+      ${selected.includes(a.name)?'checked':''}> ${a.name}${
+      a.source==='local' ? ` <span class="del" data-del="${a.name}" title="usuń">×</span>` : ''
+    }</label>`).join('');
+
+  box.querySelectorAll('input').forEach(cb=>{
+    cb.onchange = async ()=>{
+      const n = cb.dataset.n;
+      selected = cb.checked ? [...selected, n] : selected.filter(x=>x!==n);
+      localStorage.setItem('selected', JSON.stringify(selected));
+      await loadSelected(); refreshFilters(); render();
+    };
+  });
+
+  box.querySelectorAll('.del').forEach(x=>{
+    x.onclick = async ev=>{
+      ev.preventDefault(); ev.stopPropagation();
+      const n = x.dataset.del;
+      if(!confirm(`Usunąć "${n}"?`)) return;
+      const store = localStore();
+      delete store[n];
+      localStorage.setItem('csvStore', JSON.stringify(store));
+      selected = selected.filter(s=>s!==n);
+      localStorage.setItem('selected', JSON.stringify(selected));
+      await discover(); refreshFilters(); render();
+    };
+  });
+}
+
+async function loadSelected(){
+  const tables = [];
+  const store = localStore();
+  for(const a of available){
+    if(!selected.includes(a.name)) continue;
+    const p = parseCSV(store[a.name] || '');
+    if(p.rows.length) tables.push({name:a.name, headers:p.headers, rows:p.rows});
+  }
+  buildDuties(tables); status();
+}
+
+async function importFiles(fileList){
+  const files = [...fileList];
+  if(!files.length) return;
+  const store = localStore();
+  const st = document.getElementById('status');
+  st.textContent = `wczytuję ${files.length} plik(ów)…`;
+
+  let dodane = 0, bledy = [];
+
+  for(const f of files){
+    const base = f.name.replace(/\.(csv|txt|xlsx|xlsm|xls)$/i,'');
+    try {
+      if(isXlsx(f.name)){
+        const buf = new Uint8Array(await f.arrayBuffer());
+        const sheets = xlsxToCsvs(buf, base);
+        if(!sheets.length){ bledy.push(f.name + ' (nic nie rozpoznano)'); continue; }
+        for(const sh of sheets){
+          store[sh.name] = sh.csv;
+          if(!selected.includes(sh.name)) selected.push(sh.name);
+          dodane++;
+        }
+      } else {
+        store[base] = await f.text();
+        if(!selected.includes(base)) selected.push(base);
+        dodane++;
+      }
+    } catch(err){
+      console.warn('import', f.name, err);
+      bledy.push(f.name);
+    }
+  }
+
+  try {
+    localStorage.setItem('csvStore', JSON.stringify(store));
+    localStorage.setItem('selected', JSON.stringify(selected));
+  } catch(err){
+    alert('Za mało miejsca w pamięci przeglądarki — usuń część plików.');
+  }
+
+  await discover(); refreshFilters(); render();
+  if(bledy.length) st.textContent = `dodano ${dodane}, nie udało się: ${bledy.join(', ')}`;
+}
+
+document.getElementById('files').addEventListener('change', async e=>{
+  await importFiles(e.target.files);
+  e.target.value = '';
+});
+
+['dragover','drop'].forEach(ev=>{
+  document.addEventListener(ev, e=>{
+    e.preventDefault();
+    if(ev === 'drop' && e.dataTransfer && e.dataTransfer.files.length){
+      importFiles(e.dataTransfer.files);
+    }
+  });
+});
+
+/* ================= filtry ================= */
+
+function byMode(list){
+  return currentMode === 'wszystkie' ? list : list.filter(d => d.typ === currentMode);
+}
+
+function refreshFilters(){
+  const daySel = document.getElementById('fday');
+  const warSel = document.getElementById('fwarta');
+  const prevDay = daySel.value, prevWar = warSel.value;
+
+  const base = byMode(duties);
+  const days = daysList(base);
+  daySel.innerHTML = '<option value="">— wszystkie —</option>' +
+    days.map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join('');
+  daySel.value = days.includes(prevDay) ? prevDay : '';
+
+  const scoped = daySel.value ? base.filter(d => d.dzien === daySel.value) : base;
+  const warty = wartaList(scoped);
+  warSel.innerHTML = '<option value="">— wszystkie —</option>' +
+    warty.map(w=>`<option value="${esc(w)}">${esc(shortWarta(w))}</option>`).join('');
+  warSel.value = warty.includes(prevWar) ? prevWar : '';
+}
+
+/* długie opisy warty skracamy w liście wyboru */
+function shortWarta(w){
+  const s = (w||'').replace(/\s+/g,' ').trim();
+  return s.length > 60 ? s.slice(0,57) + '…' : s;
+}
+
+/* ================= widok ================= */
+
+const esc = v => (v||'').toString().replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function personCards(list, out){
+  const byPerson = new Map();
+  for(const d of list){
+    const k = norm(d.imie + '|' + d.nazwisko);
+    if(!byPerson.has(k)) byPerson.set(k, {imie:d.imie, nazwisko:d.nazwisko, items:[]});
+    byPerson.get(k).items.push(d);
+  }
+  const people = [...byPerson.values()].sort((a,b)=>
+    norm(a.nazwisko).localeCompare(norm(b.nazwisko),'pl'));
+
+  for(const p of people){
+    const card = document.createElement('div');
+    card.className = 'card';
+    let html = `<h2>${esc(p.imie)} ${esc(p.nazwisko)}</h2>`;
+    const order = daysList(duties);
+    p.items.sort((a,b)=> order.indexOf(a.dzien) - order.indexOf(b.dzien));
+    for(const d of p.items){
+      html += `<div class="warta"><h3>${esc(d.dzien)}<span class="tag${
+        d.typ==='nocne'?' n':''}">${d.typ==='nocne'?'noc':'dzień'}</span></h3>`;
+      html += `<div class="row"><span class="k">Miejsce</span><span class="v">${esc(d.miejsce)}</span></div>`;
+      html += `<div class="row"><span class="k">Warta</span><span class="v">${esc(d.warta)}</span></div></div>`;
+    }
+    card.innerHTML = html;
+    out.appendChild(card);
+  }
+}
+
+function scheduleView(list, out){
+  const order = daysList(duties);
+  const days = daysList(list).sort((a,b)=> order.indexOf(a) - order.indexOf(b));
+
+  for(const day of days){
+    const inDay = list.filter(d => d.dzien === day);
+    const nocna = inDay[0] && inDay[0].typ === 'nocne';
+    const h = document.createElement('div');
+    h.className = 'day' + (nocna ? ' n' : '');
+    h.textContent = day;
+    out.appendChild(h);
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    let html = '';
+
+    for(const w of wartaList(inDay)){
+      const inW = inDay.filter(d => d.warta === w);
+      const miejsca = [];
+      for(const d of inW) if(!miejsca.includes(d.miejsce)) miejsca.push(d.miejsce);
+
+      html += `<div class="warta"><p class="when">${esc(w)}</p>`;
+      for(const m of miejsca){
+        const osoby = inW.filter(d => d.miejsce === m);
+        html += `<h3>${esc(m)}</h3><ul class="plist">`;
+        html += osoby.map(o =>
+          `<li>${esc(o.imie)} ${esc(o.nazwisko)}${o.plec ? ` <span>${esc(o.plec)}</span>` : ''}</li>`
+        ).join('');
+        html += '</ul>';
+      }
+      html += '</div>';
+    }
+
+    card.innerHTML = html;
+    out.appendChild(card);
+  }
+}
+
+function render(){
+  const q = norm(document.getElementById('q').value);
+  const day = document.getElementById('fday').value;
+  const warta = document.getElementById('fwarta').value;
+  const out = document.getElementById('out');
+  out.innerHTML = '';
+
+  let list = byMode(duties);
+  if(day)   list = list.filter(d => d.dzien === day);
+  if(warta) list = list.filter(d => d.warta === warta);
+
+  const terms = q.split(' ').filter(Boolean);
+  if(terms.length){
+    list = list.filter(d=>{
+      const blob = norm(d.imie + ' ' + d.nazwisko);
+      return terms.every(t => blob.includes(t));
+    });
+  }
+
+  if(!list.length){
+    out.innerHTML = duties.length
+      ? '<p class="muted">Nic nie znaleziono.</p>'
+      : '<p class="muted">Brak danych — wczytaj plik xlsx lub csv w sekcji „Dane" na dole. '
+        + 'Plik zostaje tylko na tym urządzeniu.</p>';
+    return;
+  }
+
+  // szukanie po nazwisku -> karty osób, inaczej -> grafik
+  if(terms.length) personCards(list, out);
+  else scheduleView(list, out);
+}
+
+/* ================= zdarzenia ================= */
+
+document.querySelectorAll('.mode').forEach(b=>{
+  b.classList.toggle('active', b.dataset.mode===currentMode);
+  b.onclick = ()=>{
+    currentMode = b.dataset.mode;
+    localStorage.setItem('mode', currentMode);
+    document.querySelectorAll('.mode').forEach(x=>x.classList.toggle('active', x===b));
+    refreshFilters(); render();
+  };
+});
+
+document.getElementById('q').addEventListener('input', render);
+document.getElementById('fday').addEventListener('change', ()=>{ refreshFilters(); render(); });
+document.getElementById('fwarta').addEventListener('change', render);
+
+discover().then(()=>{
+  if(!duties.length) document.getElementById('datapanel').open = true;
+  refreshFilters();
+  render();
+});
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('./sw.js', {updateViaCache: 'none'});
+      reg.update();
+      let reloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (reloaded) return;
+        reloaded = true;
+        location.reload();
+      });
+    } catch(e){ console.warn('SW:', e); }
+  });
+}
+</script>
+</body>
+</html>
